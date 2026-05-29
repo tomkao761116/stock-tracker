@@ -418,7 +418,7 @@ function renderMain() {
     saveState();
   }
   if (!stock) return;
-  const { totalQty, avgCost, realizedPnL } = calcStats(stock.trades);
+  const { totalQty, avgCost, realizedPnL, totalDividend } = calcStats(stock.trades);
   const pData = state.prices[stock.symbol];
   const currentPrice = pData?.price ?? null;
   const unrealizedPnL = currentPrice != null && totalQty > 0 ? (currentPrice - avgCost) * totalQty : null;
