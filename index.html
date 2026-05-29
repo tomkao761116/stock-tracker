@@ -593,7 +593,13 @@ function renderMain() {
 
       <!-- Add Trade -->
       <div class="bg-slate-800/40 border border-white/5 rounded-2xl p-5">
-        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">新增交易</h3>
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">新增交易</h3>
+          <button onclick="fetchDividendEvents('${stock.id}','${stock.symbol}')"
+            class="flex items-center gap-1.5 text-xs text-yellow-400 hover:text-yellow-300 bg-yellow-500/10 hover:bg-yellow-500/15 border border-yellow-500/20 px-3 py-1.5 rounded-lg transition-all">
+            ✦ 自動查詢除權息
+          </button>
+        </div>
         <div class="flex flex-wrap gap-3 items-end">
           <!-- Type Toggle -->
           <div>
@@ -638,6 +644,9 @@ function renderMain() {
         <!-- Hint -->
         <p id="tradeHint" class="mt-3 text-xs text-slate-600 hidden"></p>
       </div>
+
+      <!-- Dividend Events Panel -->
+      <div id="dividendPanel" class="hidden bg-slate-800/40 border border-yellow-500/20 rounded-2xl overflow-hidden"></div>
 
       <!-- Trade History -->
       <div class="bg-slate-800/40 border border-white/5 rounded-2xl overflow-hidden">
@@ -1094,6 +1103,130 @@ function downloadTemplate() {
 document.getElementById('importModalOverlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeImportModal();
 });
+
+// ─── Dividend / Rights Auto-fetch ────────────────────────
+async function fetchDividendEvents(stockId, symbol) {
+  const panel = document.getElementById('dividendPanel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = `
+    <div class="px-5 py-4 flex items-center gap-2 text-sm text-yellow-400">
+      <span class="shimmer">⏳</span> 查詢 ${symbol} 除權息記錄中…
+    </div>`;
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?events=dividends%2Csplits&range=10y&interval=1d`;
+    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    const events = result?.events || {};
+    const dividends = events.dividends ? Object.values(events.dividends) : [];
+    const splits    = events.splits    ? Object.values(events.splits)    : [];
+
+    // 整理成統一格式
+    const stock = state.stocks.find(s => s.id === stockId);
+    const recordedDates = new Set(
+      stock.trades
+        .filter(t => t.type === 'dividend' || t.type === 'rights')
+        .map(t => t.date)
+    );
+
+    const items = [
+      ...dividends.map(d => ({
+        type: 'dividend',
+        date: new Date(d.date * 1000).toISOString().split('T')[0],
+        value: d.amount,
+        label: `現金股利 ${d.amount.toFixed(4)} 元/股`,
+      })),
+      ...splits.map(s => ({
+        type: 'rights',
+        date: new Date(s.date * 1000).toISOString().split('T')[0],
+        value: s.numerator / s.denominator,   // 拆分比例
+        splitRatio: `${s.numerator}:${s.denominator}`,
+        label: `股票分割 ${s.numerator}:${s.denominator}`,
+      })),
+    ].sort((a, b) => b.date.localeCompare(a.date));  // 新到舊
+
+    const unrecorded = items.filter(i => !recordedDates.has(i.date));
+    const recorded   = items.filter(i =>  recordedDates.has(i.date));
+
+    if (!items.length) {
+      panel.innerHTML = `
+        <div class="px-5 py-4 text-sm text-slate-500">
+          查無 ${symbol} 的除權息記錄（Yahoo Finance 可能無此資料）
+          <button onclick="document.getElementById('dividendPanel').classList.add('hidden')" class="ml-3 text-xs text-slate-600 hover:text-slate-400">關閉</button>
+        </div>`;
+      return;
+    }
+
+    const rowHtml = (item, checked, disabled) => `
+      <label class="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors cursor-pointer ${disabled ? 'opacity-40 cursor-not-allowed' : ''}">
+        <input type="checkbox" class="dividend-checkbox w-4 h-4 rounded accent-yellow-400 shrink-0"
+          value="${encodeURIComponent(JSON.stringify(item))}"
+          ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+        <span class="text-xs px-2 py-0.5 rounded-full font-semibold ${item.type === 'dividend' ? 'bg-yellow-500/15 text-yellow-400' : 'bg-violet-500/15 text-violet-400'}">
+          ${item.type === 'dividend' ? '除息' : '除權'}
+        </span>
+        <span class="font-mono text-xs text-slate-400">${item.date}</span>
+        <span class="text-sm text-slate-200 flex-1">${item.label}</span>
+        ${disabled ? '<span class="text-xs text-slate-600 shrink-0">已記錄</span>' : ''}
+      </label>`;
+
+    panel.innerHTML = `
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-yellow-500/15">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold text-yellow-400">✦ 除權息記錄</span>
+          <span class="text-xs text-slate-500">${unrecorded.length} 筆未匯入 · 共 ${items.length} 筆</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button onclick="importDividendEvents('${stockId}')"
+            class="text-xs font-semibold px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg border border-yellow-500/30 transition-all">
+            匯入勾選項目
+          </button>
+          <button onclick="document.getElementById('dividendPanel').classList.add('hidden')" class="text-slate-500 hover:text-white text-lg leading-none transition-colors">×</button>
+        </div>
+      </div>
+      <div class="divide-y divide-white/[0.03]" id="dividendList">
+        ${unrecorded.map(i => rowHtml(i, true,  false)).join('')}
+        ${recorded  .map(i => rowHtml(i, false, true )).join('')}
+      </div>
+      ${unrecorded.length === 0 ? '<p class="text-xs text-slate-600 text-center py-4">所有除權息記錄皆已匯入</p>' : ''}
+    `;
+
+  } catch(e) {
+    panel.innerHTML = `
+      <div class="px-5 py-4 text-sm text-red-400">
+        查詢失敗：${e.message}
+        <button onclick="document.getElementById('dividendPanel').classList.add('hidden')" class="ml-3 text-xs text-slate-600 hover:text-slate-400">關閉</button>
+      </div>`;
+  }
+}
+
+function importDividendEvents(stockId) {
+  const stock    = state.stocks.find(s => s.id === stockId);
+  const checkboxes = document.querySelectorAll('.dividend-checkbox:checked:not(:disabled)');
+  if (!checkboxes.length) { alert('請至少勾選一項'); return; }
+
+  for (const cb of checkboxes) {
+    const item = JSON.parse(decodeURIComponent(cb.value));
+    const { totalQty } = calcStats(stock.trades);
+
+    if (item.type === 'dividend') {
+      stock.trades.push({ type: 'dividend', qty: totalQty, price: item.value, date: item.date });
+    } else if (item.type === 'rights') {
+      // 股票分割：計算新增股數
+      // splitRatio = numerator:denominator，例 2:1 表示每 1 股變 2 股
+      const [num, den] = item.splitRatio.split(':').map(Number);
+      const newShares = Math.round(totalQty * (num / den - 1));
+      if (newShares > 0) stock.trades.push({ type: 'rights', qty: newShares, price: 0, date: item.date });
+    }
+  }
+
+  // 依日期排序交易記錄
+  stock.trades.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  saveState();
+  document.getElementById('dividendPanel').classList.add('hidden');
+  render();
+}
 
 // ─── Init ─────────────────────────────────────────────────
 // 初始化由 Firebase onAuthStateChanged 觸發，此處不直接呼叫
