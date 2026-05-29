@@ -6,53 +6,6 @@
 <title>股票均價計算器</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
-  from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc }
-  from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBTcrg04pDqZRAUNQeb6TMP1acyWen4x94",
-  authDomain: "stock-tracker-7894d.firebaseapp.com",
-  projectId: "stock-tracker-7894d",
-  storageBucket: "stock-tracker-7894d.firebasestorage.app",
-  messagingSenderId: "379032141620",
-  appId: "1:379032141620:web:fd8a1635f255de8d5caf61"
-};
-
-const app  = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db   = getFirestore(app);
-
-// 掛到 window 讓非 module 的 JS 可以呼叫
-window._fbAuth = auth;
-window._fbDb   = db;
-window._GoogleAuthProvider = GoogleAuthProvider;
-window._signInWithPopup    = signInWithPopup;
-window._signOut            = signOut;
-window._fbDoc              = doc;
-window._fbGetDoc           = getDoc;
-window._fbSetDoc           = setDoc;
-
-onAuthStateChanged(auth, user => {
-  window._currentUser = user || null;
-  if (user) {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('appShell').classList.remove('hidden');
-    document.getElementById('userAvatar').src = user.photoURL || '';
-    document.getElementById('userName').textContent = user.displayName || user.email;
-    window._loadCloudState().then(() => {
-      window.render();
-      if (window.state.stocks.length) window.refreshAllPrices();
-    });
-  } else {
-    document.getElementById('loginScreen').classList.remove('hidden');
-    document.getElementById('appShell').classList.add('hidden');
-  }
-});
-</script>
 <script>
 tailwind.config = {
   darkMode: 'class',
@@ -304,54 +257,10 @@ function loadState() {
   } catch(e) {}
 }
 
-async function saveState() {
-  const user = window._currentUser;
-  if (!user) { localStorage.setItem('stockCalc_v3', JSON.stringify({ stocks: state.stocks, activeId: state.activeId })); return; }
-  try {
-    await window._fbSetDoc(
-      window._fbDoc(window._fbDb, 'users', user.uid),
-      { stocks: state.stocks, activeId: state.activeId, updatedAt: Date.now() }
-    );
-  } catch(e) { console.error('Firestore save error', e); }
+function saveState() {
+  // 先存 localStorage（同步），Firestore 由 initFirebase 覆寫為非同步版本
+  localStorage.setItem('stockCalc_v3', JSON.stringify({ stocks: state.stocks, activeId: state.activeId }));
 }
-
-window._loadCloudState = async function() {
-  const user = window._currentUser;
-  if (!user) return;
-  try {
-    const snap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'users', user.uid));
-    if (snap.exists()) {
-      const d = snap.data();
-      state.stocks   = d.stocks   || [];
-      state.activeId = d.activeId || null;
-    } else {
-      loadState();
-      await saveState();
-    }
-    // activeId 對不上時自動選第一支
-    if ((!state.activeId || !state.stocks.find(s => s.id === state.activeId)) && state.stocks.length) {
-      state.activeId = state.stocks[0].id;
-    }
-  } catch(e) { console.error('Firestore load error', e); loadState(); }
-};
-
-window._loginWithGoogle = async function() {
-  const errEl = document.getElementById('loginError');
-  errEl.classList.add('hidden');
-  try {
-    const provider = new window._GoogleAuthProvider();
-    await window._signInWithPopup(window._fbAuth, provider);
-  } catch(e) {
-    errEl.textContent = '登入失敗：' + e.message;
-    errEl.classList.remove('hidden');
-  }
-};
-
-window._logoutUser = async function() {
-  if (!confirm('確定要登出？')) return;
-  await window._signOut(window._fbAuth);
-  state = { stocks: [], prices: {}, activeId: null };
-};
 
 // ─── Price Fetch ──────────────────────────────────────────
 async function fetchPrice(symbol) {
@@ -1348,9 +1257,105 @@ function importDividendEvents(stockId) {
   render();
 }
 
+// ─── Firebase Init (dynamic import — 與 state 同 scope) ──
+const firebaseConfig = {
+  apiKey: "AIzaSyBTcrg04pDqZRAUNQeb6TMP1acyWen4x94",
+  authDomain: "stock-tracker-7894d.firebaseapp.com",
+  projectId: "stock-tracker-7894d",
+  storageBucket: "stock-tracker-7894d.firebasestorage.app",
+  messagingSenderId: "379032141620",
+  appId: "1:379032141620:web:fd8a1635f255de8d5caf61"
+};
+
+async function initFirebase() {
+  const { initializeApp }   = await import("https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js");
+  const { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+    = await import("https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js");
+  const { getFirestore, doc, getDoc, setDoc }
+    = await import("https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js");
+
+  const app  = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db   = getFirestore(app);
+
+  // 登入 / 登出（直接存取 state，同 scope）
+  window._loginWithGoogle = async function() {
+    const errEl = document.getElementById('loginError');
+    errEl.classList.add('hidden');
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch(e) {
+      errEl.textContent = '登入失敗：' + e.message;
+      errEl.classList.remove('hidden');
+    }
+  };
+
+  window._logoutUser = async function() {
+    if (!confirm('確定要登出？')) return;
+    await signOut(auth);
+    state.stocks = []; state.prices = {}; state.activeId = null;
+    render();
+  };
+
+  // 存雲端
+  async function saveToCloud() {
+    const user = auth.currentUser;
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'users', user.uid),
+        { stocks: state.stocks, activeId: state.activeId, updatedAt: Date.now() }
+      );
+    } catch(e) { console.error('save error', e); }
+  }
+
+  // 覆寫 saveState，同時存 localStorage 和 Firestore
+  const _origSave = saveState;
+  saveState = async function() {
+    localStorage.setItem('stockCalc_v3', JSON.stringify({ stocks: state.stocks, activeId: state.activeId }));
+    await saveToCloud();
+  };
+
+  // Auth 狀態監聽
+  onAuthStateChanged(auth, async user => {
+    if (user) {
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('appShell').classList.remove('hidden');
+      const el = document.getElementById('userAvatar');
+      if (el) el.src = user.photoURL || '';
+      const un = document.getElementById('userName');
+      if (un) un.textContent = user.displayName || user.email;
+
+      // 從 Firestore 載入資料
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        if (snap.exists()) {
+          const d = snap.data();
+          state.stocks   = d.stocks   || [];
+          state.activeId = d.activeId || null;
+        } else {
+          loadState(); // 首次登入：從 localStorage 遷移
+          await saveToCloud();
+        }
+        if (!state.activeId || !state.stocks.find(s => s.id === state.activeId)) {
+          state.activeId = state.stocks[0]?.id ?? null;
+        }
+      } catch(e) {
+        console.error('load error', e);
+        loadState();
+      }
+
+      render();
+      if (state.stocks.length) refreshAllPrices();
+    } else {
+      document.getElementById('loginScreen').classList.remove('hidden');
+      document.getElementById('appShell').classList.add('hidden');
+    }
+  });
+}
+
 // ─── Init ─────────────────────────────────────────────────
-// 初始化由 Firebase onAuthStateChanged 觸發，此處不直接呼叫
-render(); // 顯示空白畫面等待登入
+render(); // 顯示登入畫面
+initFirebase();
 </script>
 </body>
 </html>
