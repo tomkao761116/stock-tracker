@@ -353,9 +353,30 @@ window._logoutUser = async function() {
 
 // ─── Price Fetch ──────────────────────────────────────────
 async function fetchPrice(symbol) {
+  // 台股（.TW / .TWO）用 TWSE 即時 API
+  const isTW  = symbol.endsWith('.TW');
+  const isTWO = symbol.endsWith('.TWO');
+  if (isTW || isTWO) {
+    const code   = symbol.replace(/\.(TW|TWO)$/i, '');
+    const market = isTWO ? 'otc' : 'tse';
+    const url    = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${market}_${code}.tw&json=1&delay=0`;
+    try {
+      const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+      const data = await res.json();
+      const item = data?.msgArray?.[0];
+      if (!item) return null;
+      const price = parseFloat(item.z) || parseFloat(item.y); // z=即時價，y=昨收（收盤後）
+      const prev  = parseFloat(item.y) || price;
+      const chg   = price - prev;
+      const chgP  = prev ? (chg / prev * 100) : 0;
+      return { price, change: chg, changeP: chgP, name: item.n || symbol };
+    } catch(e) { /* fallthrough to Yahoo */ }
+  }
+
+  // 美股 / 其他用 Yahoo Finance
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
     const meta = data?.chart?.result?.[0]?.meta;
     if (!meta) return null;
