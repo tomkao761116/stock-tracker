@@ -467,7 +467,6 @@ function renderMain() {
   const pData = state.prices[stock.symbol];
   const currentPrice = pData?.price ?? null;
   const unrealizedPnL = currentPrice != null && totalQty > 0 ? (currentPrice - avgCost) * totalQty : null;
-  const totalPnL = realizedPnL + (unrealizedPnL ?? 0);
   const returnRate = avgCost > 0 && currentPrice != null ? (currentPrice - avgCost) / avgCost * 100 : null;
 
   const fmt  = n => n == null ? '—' : n.toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
