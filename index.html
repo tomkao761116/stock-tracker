@@ -319,7 +319,8 @@ async function refreshAllPrices() {
 setInterval(refreshAllPrices, 30000);
 
 // ─── Calc ─────────────────────────────────────────────────
-function calcStats(trades) {
+function calcStats(trades = []) {
+  if (!Array.isArray(trades)) trades = [];
   let totalQty = 0, totalCost = 0, realizedPnL = 0, avgCost = 0;
   let totalDividend = 0; // 累計現金股利收入
   for (const t of trades) {
@@ -1330,7 +1331,7 @@ async function initFirebase() {
         const snap = await getDoc(doc(db, 'users', user.uid));
         if (snap.exists()) {
           const d = snap.data();
-          state.stocks   = d.stocks   || [];
+          state.stocks   = (d.stocks || []).map(s => ({ ...s, trades: Array.isArray(s.trades) ? s.trades : [] }));
           state.activeId = d.activeId || null;
         } else {
           loadState(); // 首次登入：從 localStorage 遷移
