@@ -795,118 +795,22 @@ function closeModal() {
   document.getElementById('modalOverlay').classList.add('hidden');
 }
 
-// ── 台股 / ETF 對照表（支援中文名稱搜尋）────────────────
-const TW_STOCKS = [
-  // 大型權值股
-  ['2330.TW','台積電','台灣積體電路','EQUITY'],
-  ['2317.TW','鴻海','鴻海精密工業','EQUITY'],
-  ['2454.TW','聯發科','聯發科技','EQUITY'],
-  ['2382.TW','廣達','廣達電腦','EQUITY'],
-  ['2308.TW','台達電','台達電子工業','EQUITY'],
-  ['2881.TW','富邦金','富邦金融控股','EQUITY'],
-  ['2882.TW','國泰金','國泰金融控股','EQUITY'],
-  ['2886.TW','兆豐金','兆豐金融控股','EQUITY'],
-  ['2891.TW','中信金','中信金融控股','EQUITY'],
-  ['2884.TW','玉山金','玉山金融控股','EQUITY'],
-  ['2885.TW','元大金','元大金融控股','EQUITY'],
-  ['2892.TW','第一金','第一金融控股','EQUITY'],
-  ['2880.TW','華南金','華南金融控股','EQUITY'],
-  ['2883.TW','開發金','中華開發金控','EQUITY'],
-  ['2887.TW','台新金','台新金融控股','EQUITY'],
-  ['2888.TW','新光金','新光金融控股','EQUITY'],
-  ['2890.TW','永豐金','永豐金融控股','EQUITY'],
-  ['2303.TW','聯電','聯華電子','EQUITY'],
-  ['2412.TW','中華電','中華電信','EQUITY'],
-  ['3008.TW','大立光','大立光電','EQUITY'],
-  ['2002.TW','中鋼','中國鋼鐵','EQUITY'],
-  ['1301.TW','台塑','台灣塑膠工業','EQUITY'],
-  ['1303.TW','南亞','南亞塑膠工業','EQUITY'],
-  ['1326.TW','台化','台灣化學纖維','EQUITY'],
-  ['2105.TW','正新','正新橡膠工業','EQUITY'],
-  ['2207.TW','和泰車','和泰汽車','EQUITY'],
-  ['2357.TW','華碩','華碩電腦','EQUITY'],
-  ['2352.TW','佳世達','佳世達科技','EQUITY'],
-  ['2395.TW','研華','研華科技','EQUITY'],
-  ['3711.TW','日月光投控','日月光投資控股','EQUITY'],
-  ['2379.TW','瑞昱','瑞昱半導體','EQUITY'],
-  ['2408.TW','南亞科','南亞科技','EQUITY'],
-  ['2344.TW','華邦電','華邦電子','EQUITY'],
-  ['3034.TW','聯詠','聯詠科技','EQUITY'],
-  ['2301.TW','光寶科','光寶科技','EQUITY'],
-  ['4938.TW','和碩','和碩聯合科技','EQUITY'],
-  ['2327.TW','國巨','國巨','EQUITY'],
-  ['6505.TW','台塑化','台灣塑膠化工','EQUITY'],
-  ['5880.TW','合庫金','合作金庫金控','EQUITY'],
-  ['2823.TW','中壽','中國人壽','EQUITY'],
-  ['2801.TW','彰銀','彰化商業銀行','EQUITY'],
-  ['1216.TW','統一','統一企業','EQUITY'],
-  ['2912.TW','統一超','統一超商','EQUITY'],
-  ['2103.TW','台橡','台灣合成橡膠','EQUITY'],
-  ['2609.TW','陽明','陽明海運','EQUITY'],
-  ['2615.TW','萬海','萬海航運','EQUITY'],
-  ['2603.TW','長榮','長榮海運','EQUITY'],
-  ['2618.TW','長榮航','長榮航空','EQUITY'],
-  ['2610.TW','華航','中華航空','EQUITY'],
-  ['3045.TW','台灣大','台灣大哥大','EQUITY'],
-  ['4904.TW','遠傳','遠傳電信','EQUITY'],
-  ['2474.TW','可成','可成科技','EQUITY'],
-  ['3231.TW','緯創','緯創資通','EQUITY'],
-  ['2356.TW','英業達','英業達','EQUITY'],
-  ['6669.TW','緯穎','緯穎科技服務','EQUITY'],
-  ['2376.TW','技嘉','技嘉科技','EQUITY'],
-  ['2377.TW','微星','微星科技','EQUITY'],
-  ['5283.TW','智邦','智邦科技','EQUITY'],
-  ['2345.TW','智邦','智邦科技','EQUITY'],
-  // ETF
-  ['0050.TW','元大台灣50','台灣50 ETF','ETF'],
-  ['0056.TW','元大高股息','高股息 ETF','ETF'],
-  ['006208.TW','富邦台50','台灣50 ETF','ETF'],
-  ['00878.TW','國泰永續高股息','ESG高股息ETF','ETF'],
-  ['00919.TW','群益台灣精選高息','高息ETF','ETF'],
-  ['00929.TW','復華台灣科技優息','科技高息ETF','ETF'],
-  ['00940.TW','元大台灣價值高息','價值高息ETF','ETF'],
-  ['00900.TW','富邦特選高股息30','高股息ETF','ETF'],
-  ['00713.TW','元大台灣高息低波','高息低波ETF','ETF'],
-  ['006203.TW','元大MSCI台灣','MSCI台灣ETF','ETF'],
-  ['00733.TW','富邦台灣中小','中小型ETF','ETF'],
-  ['020002.TW','元大美債20年','美債ETF','ETF'],
-  ['00679B.TW','元大美債20年','美債ETF','ETF'],
-  ['00687B.TW','國泰20年美債','美債ETF','ETF'],
-];
+const YF_PROXY = 'https://yf-proxy.aiden761116.workers.dev';
+
+function proxyUrl(url) {
+  return `${YF_PROXY}/?url=${encodeURIComponent(url)}`;
+}
 
 async function searchStocks(query) {
   if (!query || query.length < 1) return [];
-  const q = query.trim().toLowerCase();
-
-  // ── 策略 1：本地對照表（中文名稱 / 代號 模糊搜尋）────
-  const localHits = TW_STOCKS.filter(([sym, short, long]) =>
-    sym.toLowerCase().includes(q) ||
-    short.includes(q) ||
-    long.includes(q) ||
-    sym.replace('.TW','').includes(q)
-  ).slice(0, 6).map(([sym, short, long, type]) => ({
-    symbol: sym, shortname: short, longname: long,
-    exchange: 'TAI', quoteType: type,
-  }));
-  if (localHits.length) return localHits;
-
-  // ── 策略 2：直接以 chart API 驗證代號（無 CORS 問題）──
-  const candidates = [];
-  if (/^\d{4,6}$/.test(q))          candidates.push(q + '.TW', q + '.TWO');
-  if (/^\d{4,6}\.tw/i.test(q))      candidates.push(q.toUpperCase());
-  if (/^[a-z]{1,5}$/i.test(q))      candidates.push(q.toUpperCase()); // 美股
-  if (!candidates.length)            candidates.push(q.toUpperCase());
-
-  const results = await Promise.all(candidates.map(async sym => {
-    const data = await fetchPrice(sym).catch(() => null);
-    if (!data) return null;
-    return {
-      symbol: sym, longname: data.name, shortname: data.name,
-      exchange: sym.endsWith('.TW') || sym.endsWith('.TWO') ? 'TAI' : '',
-      quoteType: 'EQUITY',
-    };
-  }));
-  return results.filter(Boolean).slice(0, 5);
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0&enableFuzzyQuery=true&lang=zh-TW`;
+  try {
+    const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+    const data = await res.json();
+    return (data?.quotes || []).filter(q =>
+      q.symbol && ['EQUITY','ETF','MUTUALFUND','INDEX'].includes(q.quoteType)
+    ).slice(0, 8);
+  } catch(e) { return []; }
 }
 
 function renderSearchResults(results, query) {
@@ -1226,7 +1130,7 @@ async function fetchDividendEvents(stockId, symbol) {
 
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?events=dividends%2Csplits&range=10y&interval=1d`;
-    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
     const result = data?.chart?.result?.[0];
     const events = result?.events || {};
