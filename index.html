@@ -797,20 +797,54 @@ function closeModal() {
 
 async function searchStocks(query) {
   if (!query || query.length < 1) return [];
-  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0&enableFuzzyQuery=true&lang=zh-TW`;
+
+  // ── 策略 1：Yahoo Finance 搜尋 API（via CORS proxy）──
+  const searchUrl = `https://corsproxy.io/?url=${encodeURIComponent(
+    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0&enableFuzzyQuery=true&lang=zh-TW`
+  )}`;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const res  = await fetch(searchUrl, { signal: AbortSignal.timeout(6000) });
     const data = await res.json();
-    return (data?.quotes || []).filter(q =>
+    const hits = (data?.quotes || []).filter(q =>
       q.symbol && ['EQUITY','ETF','MUTUALFUND','INDEX'].includes(q.quoteType)
     ).slice(0, 8);
-  } catch(e) { return []; }
+    if (hits.length) return hits;
+  } catch(e) { /* fallthrough */ }
+
+  // ── 策略 2：直接查詢報價（台股自動補 .TW）──
+  const candidates = [query.toUpperCase()];
+  if (/^\d{4,6}$/.test(query)) candidates.unshift(query + '.TW');  // 台股4~6碼
+  if (/^\d{4,6}\.tw$/i.test(query)) candidates[0] = query.toUpperCase();
+
+  for (const sym of candidates) {
+    try {
+      const data = await fetchPrice(sym);
+      if (data) return [{
+        symbol:    sym,
+        longname:  data.name,
+        shortname: data.name,
+        exchange:  sym.endsWith('.TW') ? 'TAI' : '',
+        quoteType: 'EQUITY',
+      }];
+    } catch(e) { /* continue */ }
+  }
+  return [];
 }
 
 function renderSearchResults(results, query) {
   const el = document.getElementById('searchResults');
   if (!results.length) {
-    el.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">找不到「${query}」，請確認關鍵字</p>`;
+    const sym = /^\d{4,6}$/.test(query) ? query + '.TW' : query.toUpperCase();
+    el.innerHTML = `
+      <p class="text-xs text-slate-500 text-center pt-5 pb-2">找不到「${query}」的搜尋結果</p>
+      <button onclick="selectStock('${sym}','',false)"
+        class="w-full flex items-center justify-between gap-3 px-3 py-3 rounded-xl hover:bg-white/5 transition-all text-left group">
+        <div>
+          <div class="font-mono font-bold text-sm text-slate-100">${sym}</div>
+          <div class="text-xs text-slate-500 mt-0.5">直接用此代號新增</div>
+        </div>
+        <span class="text-xs font-semibold text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">+ 新增</span>
+      </button>`;
     return;
   }
   el.innerHTML = results.map(r => {
