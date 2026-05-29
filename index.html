@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股票均價計算器</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc }
+  from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBTcrg04pDqZRAUNQeb6TMP1acyWen4x94",
+  authDomain: "stock-tracker-7894d.firebaseapp.com",
+  projectId: "stock-tracker-7894d",
+  storageBucket: "stock-tracker-7894d.firebasestorage.app",
+  messagingSenderId: "379032141620",
+  appId: "1:379032141620:web:fd8a1635f255de8d5caf61"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// 掛到 window 讓非 module 的 JS 可以呼叫
+window._fbAuth = auth;
+window._fbDb   = db;
+window._GoogleAuthProvider = GoogleAuthProvider;
+window._signInWithPopup    = signInWithPopup;
+window._signOut            = signOut;
+window._fbDoc              = doc;
+window._fbGetDoc           = getDoc;
+window._fbSetDoc           = setDoc;
+
+onAuthStateChanged(auth, user => {
+  window._currentUser = user || null;
+  if (user) {
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('appShell').classList.remove('hidden');
+    document.getElementById('userAvatar').src = user.photoURL || '';
+    document.getElementById('userName').textContent = user.displayName || user.email;
+    window._loadCloudState().then(() => {
+      window.render();
+      if (window.state.stocks.length) window.refreshAllPrices();
+    });
+  } else {
+    document.getElementById('loginScreen').classList.remove('hidden');
+    document.getElementById('appShell').classList.add('hidden');
+  }
+});
+</script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        slate: {
+          950: '#0a0e1a',
+          900: '#0f1629',
+          850: '#141d35',
+          800: '#1a2540',
+          750: '#1e2d4d',
+          700: '#243358',
+        }
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body { background: #0a0e1a; }
+  .glass { background: rgba(255,255,255,0.03); backdrop-filter: blur(12px); }
+  .glow-green { box-shadow: 0 0 20px rgba(34,197,94,0.15); }
+  .glow-red   { box-shadow: 0 0 20px rgba(239,68,68,0.15); }
+  .glow-blue  { box-shadow: 0 0 30px rgba(99,102,241,0.2); }
+  .tab-active { background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.1)); border-color: rgba(99,102,241,0.5) !important; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .card-hover { transition: transform 0.2s, box-shadow 0.2s; }
+  .card-hover:hover { transform: translateY(-1px); }
+  .number-input::-webkit-outer-spin-button, .number-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .number-input { -moz-appearance: textfield; }
+  .scrollbar-thin::-webkit-scrollbar { height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 2px; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+  .fade-in { animation: fadeIn 0.3s ease forwards; }
+  @keyframes shimmer { 0%,100% { opacity:0.5 } 50% { opacity:1 } }
+  .shimmer { animation: shimmer 1.5s ease-in-out infinite; }
+  .modal-backdrop { background: rgba(0,0,0,0.75); }
+  input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
+</style>
+</head>
+<body class="text-slate-100 min-h-screen font-sans">
+
+<!-- ── Login Screen ── -->
+<div id="loginScreen" class="fixed inset-0 z-50 flex items-center justify-center" style="background:#0a0e1a">
+  <div class="text-center">
+    <div class="w-16 h-16 rounded-2xl bg-indigo-500/20 flex items-center justify-center text-3xl mx-auto mb-5">📈</div>
+    <h1 class="text-2xl font-bold gradient-text mb-1">股票均價計算器</h1>
+    <p class="text-sm text-slate-500 mb-8">登入後資料自動跨裝置同步</p>
+    <button onclick="window._loginWithGoogle()"
+      class="flex items-center gap-3 mx-auto px-6 py-3 bg-white text-slate-900 font-semibold rounded-xl shadow-lg hover:bg-slate-100 transition-all">
+      <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      使用 Google 帳號登入
+    </button>
+    <p id="loginError" class="mt-4 text-xs text-red-400 hidden"></p>
+  </div>
+</div>
+
+<!-- ── App Shell ── -->
+<div id="appShell" class="hidden">
+
+<!-- ── Header ── -->
+<header class="border-b border-white/5 bg-slate-900/80 backdrop-blur-xl sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto px-5 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center text-base">📈</div>
+      <div>
+        <h1 class="font-bold text-sm tracking-wide gradient-text">股票均價計算器</h1>
+        <p class="text-xs text-slate-500 font-mono">Portfolio Tracker</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <div id="refreshStatus" class="flex items-center gap-1.5 text-xs text-slate-400">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shimmer"></span>
+        <span>即時報價</span>
+        <span id="lastUpdateTime" class="text-slate-600 font-mono"></span>
+      </div>
+      <button onclick="openImportModal()" class="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 hover:border-indigo-500/50 px-3 py-1.5 rounded-lg transition-all">
+        ↑ 匯入
+      </button>
+      <button onclick="refreshAllPrices()" class="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 px-3 py-1.5 rounded-lg transition-all">
+        <span id="refreshIcon">↻</span> 刷新
+      </button>
+      <!-- User Info -->
+      <div class="flex items-center gap-2 pl-2 border-l border-white/10">
+        <img id="userAvatar" src="" class="w-7 h-7 rounded-full bg-slate-700 object-cover" onerror="this.style.display='none'">
+        <span id="userName" class="text-xs text-slate-400 max-w-[100px] truncate hidden sm:block"></span>
+        <button onclick="window._logoutUser()" class="text-xs text-slate-500 hover:text-red-400 transition-colors" title="登出">↩</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Tabs ── -->
+<div class="border-b border-white/5 bg-slate-900/50">
+  <div class="max-w-6xl mx-auto px-5">
+    <div id="tabsBar" class="flex items-end gap-1 overflow-x-auto scrollbar-thin pb-0 pt-2"></div>
+  </div>
+</div>
+
+<!-- ── Main ── -->
+<main class="max-w-6xl mx-auto px-5 py-6" id="mainContent"></main>
+
+<!-- ── Add Stock Modal ── -->
+<div id="modalOverlay" class="fixed inset-0 z-50 hidden flex items-center justify-center modal-backdrop">
+  <div class="w-full max-w-sm mx-4 bg-slate-900 border border-white/10 rounded-2xl p-6 shadow-2xl glow-blue fade-in">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-9 h-9 rounded-xl bg-indigo-500/20 flex items-center justify-center text-lg">🔍</div>
+      <div>
+        <h3 class="font-bold text-sm">新增股票</h3>
+        <p class="text-xs text-slate-500">搜尋台股或美股代號</p>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">股票代號</label>
+        <input id="newSymbol" type="text" placeholder="2330.TW 或 AAPL"
+          class="mt-1.5 w-full bg-white/5 border border-white/10 focus:border-indigo-500/60 focus:bg-indigo-500/5 rounded-xl px-4 py-2.5 text-sm outline-none transition-all placeholder-slate-600 font-mono tracking-wide">
+        <p class="mt-1.5 text-xs text-slate-600">台股加 .TW（0050.TW）· 美股直接輸入（TSLA）</p>
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">自訂名稱 <span class="normal-case text-slate-600 font-normal">（選填）</span></label>
+        <input id="newName" type="text" placeholder="例：台積電"
+          class="mt-1.5 w-full bg-white/5 border border-white/10 focus:border-indigo-500/60 focus:bg-indigo-500/5 rounded-xl px-4 py-2.5 text-sm outline-none transition-all placeholder-slate-600">
+      </div>
+    </div>
+    <div class="flex gap-2.5 mt-5">
+      <button onclick="closeModal()" class="flex-1 py-2.5 text-sm font-semibold text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10">取消</button>
+      <button onclick="addStock()" class="flex-1 py-2.5 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all shadow-lg shadow-indigo-500/20">新增股票</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Import Modal ── -->
+<div id="importModalOverlay" class="fixed inset-0 z-50 hidden flex items-center justify-center modal-backdrop">
+  <div class="w-full max-w-2xl mx-4 bg-slate-900 border border-white/10 rounded-2xl shadow-2xl glow-blue fade-in flex flex-col max-h-[90vh]">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-5 border-b border-white/5">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-indigo-500/20 flex items-center justify-center text-lg">📂</div>
+        <div>
+          <h3 class="font-bold text-sm">匯入交易記錄</h3>
+          <p class="text-xs text-slate-500">支援 .csv 與 .xlsx 格式</p>
+        </div>
+      </div>
+      <button onclick="closeImportModal()" class="text-slate-500 hover:text-white transition-colors text-xl leading-none">×</button>
+    </div>
+
+    <!-- Body -->
+    <div class="overflow-y-auto flex-1 p-6 space-y-5">
+
+      <!-- Upload Zone -->
+      <div id="importDropZone"
+        class="border-2 border-dashed border-white/10 hover:border-indigo-500/40 rounded-2xl p-8 text-center cursor-pointer transition-all group"
+        onclick="document.getElementById('importFileInput').click()"
+        ondragover="event.preventDefault(); this.classList.add('border-indigo-500/60','bg-indigo-500/5')"
+        ondragleave="this.classList.remove('border-indigo-500/60','bg-indigo-500/5')"
+        ondrop="handleFileDrop(event)">
+        <div class="text-3xl mb-3 group-hover:scale-110 transition-transform">📄</div>
+        <p class="text-sm font-semibold text-slate-300">拖曳檔案到這裡，或點擊選擇</p>
+        <p class="text-xs text-slate-600 mt-1">支援 .csv · .xlsx · .xls</p>
+        <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls" class="hidden" onchange="handleFileSelect(event)">
+      </div>
+
+      <!-- Column Format Info -->
+      <div class="bg-slate-800/50 border border-white/5 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">欄位格式說明</p>
+          <button onclick="downloadTemplate()" class="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors">
+            ↓ 下載範本
+          </button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs font-mono">
+            <thead>
+              <tr class="text-slate-500 border-b border-white/5">
+                <th class="text-left py-1.5 pr-4">欄位名稱</th>
+                <th class="text-left py-1.5 pr-4">必填</th>
+                <th class="text-left py-1.5">範例值</th>
+              </tr>
+            </thead>
+            <tbody class="text-slate-400">
+              <tr class="border-b border-white/[0.03]"><td class="py-1.5 pr-4 text-indigo-400">symbol</td><td class="pr-4 text-emerald-400">✓</td><td>2330.TW</td></tr>
+              <tr class="border-b border-white/[0.03]"><td class="py-1.5 pr-4 text-indigo-400">type</td><td class="pr-4 text-emerald-400">✓</td><td>buy / sell / 買入 / 賣出</td></tr>
+              <tr class="border-b border-white/[0.03]"><td class="py-1.5 pr-4 text-indigo-400">qty</td><td class="pr-4 text-emerald-400">✓</td><td>1000</td></tr>
+              <tr class="border-b border-white/[0.03]"><td class="py-1.5 pr-4 text-indigo-400">price</td><td class="pr-4 text-emerald-400">✓</td><td>850.00</td></tr>
+              <tr><td class="py-1.5 pr-4 text-indigo-400">date</td><td class="pr-4 text-slate-600">—</td><td>2024-11-01</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Preview Table -->
+      <div id="importPreview" class="hidden space-y-4">
+
+        <!-- Header row -->
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            匯入預覽 <span id="importPreviewCount" class="text-indigo-400 font-mono normal-case ml-1"></span>
+          </p>
+          <button onclick="clearImport()" class="text-xs text-slate-600 hover:text-red-400 transition-colors">清除</button>
+        </div>
+
+        <!-- Stock summary chips -->
+        <div id="importStockSummary" class="flex flex-wrap gap-2"></div>
+
+        <!-- Detail table (grouped by stock) -->
+        <div id="importPreviewBody" class="space-y-3"></div>
+
+        <div id="importErrorSummary" class="hidden p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400"></div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="px-6 py-4 border-t border-white/5 flex items-center justify-between">
+      <p class="text-xs text-slate-600" id="importFooterHint">選擇檔案後可預覽並確認匯入</p>
+      <div class="flex gap-2.5">
+        <button onclick="closeImportModal()" class="px-4 py-2 text-sm font-semibold text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10">取消</button>
+        <button id="importConfirmBtn" onclick="confirmImport()" disabled
+          class="px-5 py-2 text-sm font-semibold bg-indigo-600 text-white rounded-xl transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-indigo-500 disabled:hover:bg-indigo-600">
+          確認匯入
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div> <!-- /#appShell -->
+
+<script>
+// ─── State ───────────────────────────────────────────────
+let state = { stocks: [], prices: {}, activeId: null };
+let _tradeType = 'buy';
+
+function loadState() {
+  // legacy localStorage migration only (Firestore is primary)
+  try {
+    const s = localStorage.getItem('stockCalc_v3');
+    if (s) { const d = JSON.parse(s); state.stocks = d.stocks || []; state.activeId = d.activeId || null; }
+  } catch(e) {}
+}
+
+async function saveState() {
+  const user = window._currentUser;
+  if (!user) { localStorage.setItem('stockCalc_v3', JSON.stringify({ stocks: state.stocks, activeId: state.activeId })); return; }
+  try {
+    await window._fbSetDoc(
+      window._fbDoc(window._fbDb, 'users', user.uid),
+      { stocks: state.stocks, activeId: state.activeId, updatedAt: Date.now() }
+    );
+  } catch(e) { console.error('Firestore save error', e); }
+}
+
+window._loadCloudState = async function() {
+  const user = window._currentUser;
+  if (!user) return;
+  try {
+    const snap = await window._fbGetDoc(window._fbDoc(window._fbDb, 'users', user.uid));
+    if (snap.exists()) {
+      const d = snap.data();
+      state.stocks   = d.stocks   || [];
+      state.activeId = d.activeId || null;
+    } else {
+      // first login — migrate localStorage data if any
+      loadState();
+      await saveState();
+    }
+    if (!state.activeId && state.stocks.length) state.activeId = state.stocks[0].id;
+  } catch(e) { console.error('Firestore load error', e); loadState(); }
+};
+
+window._loginWithGoogle = async function() {
+  const errEl = document.getElementById('loginError');
+  errEl.classList.add('hidden');
+  try {
+    const provider = new window._GoogleAuthProvider();
+    await window._signInWithPopup(window._fbAuth, provider);
+  } catch(e) {
+    errEl.textContent = '登入失敗：' + e.message;
+    errEl.classList.remove('hidden');
+  }
+};
+
+window._logoutUser = async function() {
+  if (!confirm('確定要登出？')) return;
+  await window._signOut(window._fbAuth);
+  state = { stocks: [], prices: {}, activeId: null };
+};
+
+// ─── Price Fetch ──────────────────────────────────────────
+async function fetchPrice(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const data = await res.json();
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (!meta) return null;
+    const price = meta.regularMarketPrice ?? meta.previousClose;
+    const prev  = meta.previousClose ?? price;
+    const chg   = price - prev;
+    const chgP  = prev ? (chg / prev * 100) : 0;
+    return { price, change: chg, changeP: chgP, name: meta.longName || meta.shortName || symbol };
+  } catch(e) { return null; }
+}
+
+async function refreshAllPrices() {
+  const symbols = [...new Set(state.stocks.map(s => s.symbol))];
+  if (!symbols.length) return;
+  const icon = document.getElementById('refreshIcon');
+  if (icon) { icon.style.display = 'inline-block'; icon.style.animation = 'spin 1s linear infinite'; }
+  await Promise.all(symbols.map(async sym => {
+    const data = await fetchPrice(sym);
+    if (data) state.prices[sym] = data;
+  }));
+  const now = new Date();
+  const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+  const el = document.getElementById('lastUpdateTime');
+  if (el) el.textContent = t;
+  if (icon) icon.style.animation = '';
+  render();
+}
+
+setInterval(refreshAllPrices, 30000);
+
+// ─── Calc ─────────────────────────────────────────────────
+function calcStats(trades) {
+  let totalQty = 0, totalCost = 0, realizedPnL = 0, avgCost = 0;
+  for (const t of trades) {
+    if (t.type === 'buy') {
+      totalCost += t.qty * t.price; totalQty += t.qty;
+      avgCost = totalQty > 0 ? totalCost / totalQty : 0;
+    } else {
+      realizedPnL += t.qty * (t.price - avgCost);
+      totalQty -= t.qty; totalCost = avgCost * totalQty;
+      if (totalQty <= 0) { totalQty = 0; totalCost = 0; avgCost = 0; }
+    }
+  }
+  return { totalQty, avgCost, realizedPnL };
+}
+
+// ─── Render ───────────────────────────────────────────────
+function render() { renderTabs(); renderMain(); }
+
+function renderTabs() {
+  const bar = document.getElementById('tabsBar');
+  bar.innerHTML = '';
+  for (const s of state.stocks) {
+    const { totalQty, avgCost } = calcStats(s.trades);
+    const pData = state.prices[s.symbol];
+    let pnlBadge = '';
+    if (pData && totalQty > 0) {
+      const pnl = (pData.price - avgCost) * totalQty;
+      const up = pnl >= 0;
+      pnlBadge = `<span class="ml-1.5 text-xs font-mono font-semibold px-1.5 py-0.5 rounded ${up ? 'bg-red-500/15 text-red-400' : 'bg-emerald-500/15 text-emerald-400'}">${up ? '▲' : '▼'}</span>`;
+    }
+    const active = s.id === state.activeId;
+    const tab = document.createElement('button');
+    tab.className = `flex items-center gap-0.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${active ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`;
+    tab.innerHTML = `<span class="font-mono">${s.symbol}</span>${pnlBadge}`;
+    tab.onclick = () => { state.activeId = s.id; render(); };
+    bar.appendChild(tab);
+  }
+  const addBtn = document.createElement('button');
+  addBtn.className = 'px-4 py-2.5 text-slate-500 hover:text-indigo-400 text-lg font-light transition-colors border-b-2 border-transparent';
+  addBtn.textContent = '+';
+  addBtn.title = '新增股票';
+  addBtn.onclick = openAddModal;
+  bar.appendChild(addBtn);
+}
+
+function renderMain() {
+  const main = document.getElementById('mainContent');
+  if (!state.stocks.length) {
+    main.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-24 fade-in">
+        <div class="w-16 h-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-3xl mb-4">📊</div>
+        <h2 class="text-lg font-semibold text-slate-300 mb-1">開始追蹤你的投資組合</h2>
+        <p class="text-sm text-slate-600 mb-6">點擊上方「+」新增第一支股票</p>
+        <button onclick="openAddModal()" class="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25">
+          + 新增股票
+        </button>
+      </div>`;
+    return;
+  }
+  const stock = state.stocks.find(s => s.id === state.activeId);
+  if (!stock) return;
+  const { totalQty, avgCost, realizedPnL } = calcStats(stock.trades);
+  const pData = state.prices[stock.symbol];
+  const currentPrice = pData?.price ?? null;
+  const unrealizedPnL = currentPrice != null && totalQty > 0 ? (currentPrice - avgCost) * totalQty : null;
+  const totalPnL = realizedPnL + (unrealizedPnL ?? 0);
+  const returnRate = avgCost > 0 && currentPrice != null ? (currentPrice - avgCost) / avgCost * 100 : null;
+
+  const fmt  = n => n == null ? '—' : n.toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtI = n => n == null ? '—' : Math.round(Math.abs(n)).toLocaleString('zh-TW');
+  const sign = n => n >= 0 ? '+' : '-';
+  const upDn = n => n >= 0 ? 'text-red-400' : 'text-emerald-400';
+  const bgUpDn = n => n >= 0 ? 'bg-red-500/10 border-red-500/20' : 'bg-emerald-500/10 border-emerald-500/20';
+
+  // Price area
+  let priceArea = '';
+  if (pData) {
+    const up = pData.change >= 0;
+    priceArea = `
+      <div class="text-right">
+        <div class="text-3xl font-bold font-mono ${upDn(pData.change)}">${fmt(pData.price)}</div>
+        <div class="flex items-center justify-end gap-1.5 mt-1">
+          <span class="text-sm font-mono ${upDn(pData.change)}">${sign(pData.change)}${fmt(Math.abs(pData.change))}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full font-semibold font-mono ${up ? 'bg-red-500/15 text-red-400' : 'bg-emerald-500/15 text-emerald-400'}">${sign(pData.changeP)}${Math.abs(pData.changeP).toFixed(2)}%</span>
+        </div>
+        <div class="text-xs text-slate-600 mt-1">今日漲跌</div>
+      </div>`;
+  } else {
+    priceArea = `<div class="text-right"><div class="text-slate-500 text-sm shimmer">載入報價中…</div></div>`;
+  }
+
+  const statCards = [
+    { label: '持倉股數', value: totalQty > 0 ? totalQty.toLocaleString() : '—', sub: '股', color: 'text-slate-200', icon: '🏦' },
+    { label: '持倉均價', value: avgCost > 0 ? fmt(avgCost) : '—', sub: '', color: 'text-slate-200', icon: '⚖️' },
+    { label: '現價', value: currentPrice != null ? fmt(currentPrice) : '—', sub: '', color: currentPrice != null && avgCost > 0 ? upDn(currentPrice - avgCost) : 'text-slate-200', icon: '💹' },
+    { label: '未實現損益', value: unrealizedPnL != null ? `${sign(unrealizedPnL)}${fmtI(unrealizedPnL)}` : '—', sub: '', color: unrealizedPnL != null ? upDn(unrealizedPnL) : 'text-slate-400', icon: '📊', border: unrealizedPnL != null ? bgUpDn(unrealizedPnL) : '' },
+    { label: '已實現損益', value: `${sign(realizedPnL)}${fmtI(realizedPnL)}`, sub: '', color: upDn(realizedPnL), icon: '✅', border: bgUpDn(realizedPnL) },
+    { label: '報酬率', value: returnRate != null ? `${sign(returnRate)}${Math.abs(returnRate).toFixed(2)}%` : '—', sub: '', color: returnRate != null ? upDn(returnRate) : 'text-slate-400', icon: '📈', border: returnRate != null ? bgUpDn(returnRate) : '' },
+  ];
+
+  const statsHTML = statCards.map(c => `
+    <div class="card-hover bg-slate-800/50 border ${c.border || 'border-white/5'} rounded-xl p-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-slate-500 font-medium">${c.label}</span>
+        <span class="text-base">${c.icon}</span>
+      </div>
+      <div class="text-xl font-bold font-mono ${c.color}">${c.value}<span class="text-sm font-normal text-slate-500 ml-1">${c.sub}</span></div>
+    </div>`).join('');
+
+  const tradeTableHTML = stock.trades.length === 0
+    ? `<div class="py-10 text-center text-slate-600 text-sm">尚無交易記錄</div>`
+    : `<div class="overflow-x-auto scrollbar-thin">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-slate-600 uppercase tracking-wider border-b border-white/5">
+              <th class="text-left py-3 px-3 font-semibold">#</th>
+              <th class="text-left py-3 px-3 font-semibold">日期</th>
+              <th class="text-left py-3 px-3 font-semibold">類型</th>
+              <th class="text-right py-3 px-3 font-semibold">股數</th>
+              <th class="text-right py-3 px-3 font-semibold">成交價</th>
+              <th class="text-right py-3 px-3 font-semibold">小計</th>
+              <th class="py-3 px-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${stock.trades.map((t, i) => `
+              <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors group">
+                <td class="py-3 px-3 text-slate-600 font-mono text-xs">${i + 1}</td>
+                <td class="py-3 px-3 text-slate-400 font-mono text-xs">${t.date || '—'}</td>
+                <td class="py-3 px-3">
+                  <span class="text-xs font-bold px-2.5 py-1 rounded-full ${t.type === 'buy' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}">
+                    ${t.type === 'buy' ? '買入' : '賣出'}
+                  </span>
+                </td>
+                <td class="py-3 px-3 text-right font-mono font-semibold">${t.qty.toLocaleString()}</td>
+                <td class="py-3 px-3 text-right font-mono">${fmt(t.price)}</td>
+                <td class="py-3 px-3 text-right font-mono text-slate-300">${(t.qty * t.price).toLocaleString('zh-TW', {maximumFractionDigits:0})}</td>
+                <td class="py-3 px-3 text-right">
+                  <button onclick="deleteTrade('${stock.id}', ${i})" class="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-red-400 transition-all text-base leading-none">×</button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+  main.innerHTML = `
+    <div class="space-y-5 fade-in">
+
+      <!-- Top Bar -->
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <h2 class="text-2xl font-bold font-mono">${stock.symbol}</h2>
+            <span class="text-sm text-slate-500 font-medium">${pData?.name || stock.name || ''}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="refreshSingle('${stock.symbol}')" class="text-xs text-slate-500 hover:text-indigo-400 transition-colors flex items-center gap-1">
+              ↻ 更新報價
+            </button>
+            <span class="text-slate-700">·</span>
+            <button onclick="removeStock('${stock.id}')" class="text-xs text-slate-500 hover:text-red-400 transition-colors">
+              刪除股票
+            </button>
+          </div>
+        </div>
+        ${priceArea}
+      </div>
+
+      <!-- Stats Grid -->
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        ${statsHTML}
+      </div>
+
+      <!-- Add Trade -->
+      <div class="bg-slate-800/40 border border-white/5 rounded-2xl p-5">
+        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">新增交易</h3>
+        <div class="flex flex-wrap gap-3 items-end">
+          <!-- Buy/Sell Toggle -->
+          <div>
+            <div class="text-xs text-slate-500 mb-1.5 font-medium">類型</div>
+            <div class="flex rounded-xl overflow-hidden border border-white/10 p-0.5 bg-slate-900/50">
+              <button id="typeBuyBtn" onclick="setTradeType('buy')"
+                class="px-5 py-2 text-sm font-semibold rounded-lg transition-all bg-emerald-500/20 text-emerald-400">
+                買入
+              </button>
+              <button id="typeSellBtn" onclick="setTradeType('sell')"
+                class="px-5 py-2 text-sm font-semibold rounded-lg transition-all text-slate-500 hover:text-slate-300">
+                賣出
+              </button>
+            </div>
+          </div>
+          <!-- Qty -->
+          <div class="flex-1 min-w-[120px]">
+            <div class="text-xs text-slate-500 mb-1.5 font-medium">股數</div>
+            <input type="number" id="tradeQty" placeholder="1000" min="1"
+              class="number-input w-full bg-slate-900/80 border border-white/10 focus:border-indigo-500/50 rounded-xl px-4 py-2.5 text-sm font-mono outline-none transition-all placeholder-slate-700 text-slate-200">
+          </div>
+          <!-- Price -->
+          <div class="flex-1 min-w-[140px]">
+            <div class="text-xs text-slate-500 mb-1.5 font-medium">成交價</div>
+            <div class="relative">
+              <input type="number" id="tradePrice" placeholder="0.00" step="0.01" min="0"
+                class="number-input w-full bg-slate-900/80 border border-white/10 focus:border-indigo-500/50 rounded-xl px-4 py-2.5 text-sm font-mono outline-none transition-all placeholder-slate-700 text-slate-200">
+              ${currentPrice != null ? `<button onclick="document.getElementById('tradePrice').value='${currentPrice.toFixed(2)}'" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors whitespace-nowrap">填現價</button>` : ''}
+            </div>
+          </div>
+          <!-- Date -->
+          <div>
+            <div class="text-xs text-slate-500 mb-1.5 font-medium">日期</div>
+            <input type="date" id="tradeDate" value="${new Date().toISOString().split('T')[0]}"
+              class="bg-slate-900/80 border border-white/10 focus:border-indigo-500/50 rounded-xl px-4 py-2.5 text-sm outline-none transition-all text-slate-300">
+          </div>
+          <!-- Submit -->
+          <button onclick="addTrade('${stock.id}')"
+            class="px-6 py-2.5 text-sm font-bold rounded-xl transition-all shadow-lg text-white
+              ${_tradeType === 'buy'
+                ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'
+                : 'bg-red-600 hover:bg-red-500 shadow-red-500/20'}">
+            確認新增
+          </button>
+        </div>
+      </div>
+
+      <!-- Trade History -->
+      <div class="bg-slate-800/40 border border-white/5 rounded-2xl overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-white/5">
+          <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">交易明細</h3>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-slate-600">${stock.trades.length} 筆記錄</span>
+            ${stock.trades.length > 0 ? `<button onclick="clearTrades('${stock.id}')" class="text-xs text-slate-600 hover:text-red-400 transition-colors">清除全部</button>` : ''}
+          </div>
+        </div>
+        ${tradeTableHTML}
+      </div>
+
+    </div>`;
+}
+
+// ─── Actions ──────────────────────────────────────────────
+function setTradeType(t) {
+  _tradeType = t;
+  const buyBtn  = document.getElementById('typeBuyBtn');
+  const sellBtn = document.getElementById('typeSellBtn');
+  if (!buyBtn) return;
+  if (t === 'buy') {
+    buyBtn.className  = 'px-5 py-2 text-sm font-semibold rounded-lg transition-all bg-emerald-500/20 text-emerald-400';
+    sellBtn.className = 'px-5 py-2 text-sm font-semibold rounded-lg transition-all text-slate-500 hover:text-slate-300';
+  } else {
+    buyBtn.className  = 'px-5 py-2 text-sm font-semibold rounded-lg transition-all text-slate-500 hover:text-slate-300';
+    sellBtn.className = 'px-5 py-2 text-sm font-semibold rounded-lg transition-all bg-red-500/20 text-red-400';
+  }
+  // Re-render just the confirm button
+  const confirmBtn = document.querySelector('[onclick*="addTrade"]');
+  if (confirmBtn) {
+    confirmBtn.className = `px-6 py-2.5 text-sm font-bold rounded-xl transition-all shadow-lg text-white ${t === 'buy' ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20' : 'bg-red-600 hover:bg-red-500 shadow-red-500/20'}`;
+  }
+}
+
+function addTrade(stockId) {
+  const qty   = parseFloat(document.getElementById('tradeQty').value);
+  const price = parseFloat(document.getElementById('tradePrice').value);
+  const date  = document.getElementById('tradeDate').value;
+  if (!qty || qty <= 0 || !price || price <= 0) {
+    // Shake animation hint
+    ['tradeQty','tradePrice'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && (!parseFloat(el.value) || parseFloat(el.value) <= 0)) {
+        el.style.borderColor = 'rgba(239,68,68,0.6)';
+        setTimeout(() => el.style.borderColor = '', 2000);
+      }
+    });
+    return;
+  }
+  const stock = state.stocks.find(s => s.id === stockId);
+  if (!stock) return;
+  const { totalQty } = calcStats(stock.trades);
+  if (_tradeType === 'sell' && qty > totalQty) {
+    alert(`賣出股數 (${qty}) 不得超過持倉 (${totalQty} 股)`);
+    return;
+  }
+  stock.trades.push({ type: _tradeType, qty, price, date });
+  saveState();
+  // Clear inputs
+  document.getElementById('tradeQty').value = '';
+  document.getElementById('tradePrice').value = '';
+  render();
+}
+
+function deleteTrade(stockId, idx) {
+  const stock = state.stocks.find(s => s.id === stockId);
+  if (!stock) return;
+  stock.trades.splice(idx, 1);
+  saveState(); render();
+}
+
+function clearTrades(stockId) {
+  if (!confirm('確定要清除所有交易記錄？')) return;
+  const stock = state.stocks.find(s => s.id === stockId);
+  if (stock) { stock.trades = []; saveState(); render(); }
+}
+
+function removeStock(stockId) {
+  if (!confirm('確定要刪除此股票及所有記錄？')) return;
+  state.stocks = state.stocks.filter(s => s.id !== stockId);
+  state.activeId = state.stocks[0]?.id ?? null;
+  saveState(); render();
+}
+
+async function refreshSingle(symbol) {
+  const data = await fetchPrice(symbol);
+  if (data) { state.prices[symbol] = data; render(); }
+}
+
+// ─── Modal ────────────────────────────────────────────────
+function openAddModal() {
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  setTimeout(() => document.getElementById('newSymbol').focus(), 50);
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.add('hidden');
+  document.getElementById('newSymbol').value = '';
+  document.getElementById('newName').value = '';
+}
+
+async function addStock() {
+  const symbol = document.getElementById('newSymbol').value.trim().toUpperCase();
+  const name   = document.getElementById('newName').value.trim();
+  if (!symbol) return;
+  if (state.stocks.find(s => s.symbol === symbol)) { alert('此股票已存在'); return; }
+  const id = Date.now().toString();
+  state.stocks.push({ id, symbol, name, trades: [] });
+  state.activeId = id;
+  closeModal(); saveState(); render();
+  const data = await fetchPrice(symbol);
+  if (data) { state.prices[symbol] = data; render(); }
+}
+
+document.getElementById('newSymbol').addEventListener('keydown', e => { if (e.key === 'Enter') addStock(); });
+document.getElementById('newName').addEventListener('keydown', e => { if (e.key === 'Enter') addStock(); });
+document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+// ─── Import ───────────────────────────────────────────────
+let _importRows = [];
+
+function openImportModal() {
+  document.getElementById('importModalOverlay').classList.remove('hidden');
+}
+function closeImportModal() {
+  document.getElementById('importModalOverlay').classList.add('hidden');
+  clearImport();
+}
+function clearImport() {
+  _importRows = [];
+  document.getElementById('importPreview').classList.add('hidden');
+  document.getElementById('importFileInput').value = '';
+  document.getElementById('importConfirmBtn').disabled = true;
+  document.getElementById('importFooterHint').textContent = '選擇檔案後可預覽並確認匯入';
+}
+
+function handleFileDrop(e) {
+  e.preventDefault();
+  const zone = document.getElementById('importDropZone');
+  zone.classList.remove('border-indigo-500/60','bg-indigo-500/5');
+  const file = e.dataTransfer.files[0];
+  if (file) parseImportFile(file);
+}
+function handleFileSelect(e) {
+  const file = e.target.files[0];
+  if (file) parseImportFile(file);
+}
+
+function parseImportFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      processImportRows(raw, file.name);
+    } catch(err) {
+      alert('檔案解析失敗：' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Flexible header mapping
+const COL_MAP = {
+  symbol: ['symbol','股票','股票代號','ticker','代號'],
+  type:   ['type','類型','買賣','操作','action'],
+  qty:    ['qty','數量','股數','quantity','shares','張數'],
+  price:  ['price','價格','成交價','成交均價','cost'],
+  date:   ['date','日期','交易日','trade_date'],
+};
+
+function normalizeHeader(headers) {
+  const map = {};
+  for (const [field, aliases] of Object.entries(COL_MAP)) {
+    for (const h of headers) {
+      if (aliases.includes(h.toLowerCase().trim())) { map[field] = h; break; }
+    }
+  }
+  return map;
+}
+
+function processImportRows(raw, filename) {
+  if (!raw.length) { alert('檔案內無資料'); return; }
+  const headers = Object.keys(raw[0]);
+  const colMap = normalizeHeader(headers);
+  const missing = ['symbol','type','qty','price'].filter(f => !colMap[f]);
+  if (missing.length) {
+    alert(`找不到必要欄位：${missing.join(', ')}\n請確認欄位名稱或下載範本參考格式`);
+    return;
+  }
+
+  _importRows = raw.map((row, i) => {
+    const symbol = String(row[colMap.symbol] || '').trim().toUpperCase();
+    const typeRaw = String(row[colMap.type] || '').trim().toLowerCase();
+    const type = ['buy','買入','買'].includes(typeRaw) ? 'buy' : ['sell','賣出','賣'].includes(typeRaw) ? 'sell' : null;
+    const qty   = parseFloat(row[colMap.qty]);
+    const price = parseFloat(row[colMap.price]);
+    let date = '';
+    if (colMap.date && row[colMap.date]) {
+      const d = row[colMap.date];
+      if (d instanceof Date) date = d.toISOString().split('T')[0];
+      else date = String(d).trim();
+    }
+    const errors = [];
+    if (!symbol) errors.push('缺少股票代號');
+    if (!type)   errors.push('類型須為 buy/sell');
+    if (!qty || qty <= 0)     errors.push('股數無效');
+    if (!price || price <= 0) errors.push('價格無效');
+    return { symbol, type, qty, price, date, errors, rowNum: i + 2 };
+  });
+
+  renderImportPreview(filename);
+}
+
+function renderImportPreview(filename) {
+  const valid   = _importRows.filter(r => !r.errors.length);
+  const invalid = _importRows.filter(r =>  r.errors.length);
+  const fmt = n => Number(n).toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Group valid rows by symbol
+  const grouped = {};
+  for (const r of _importRows) {
+    const key = r.symbol || '（未知）';
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(r);
+  }
+
+  // ── Stock summary chips ──
+  const chipColors = ['bg-indigo-500/15 border-indigo-500/30 text-indigo-300',
+                      'bg-violet-500/15 border-violet-500/30 text-violet-300',
+                      'bg-sky-500/15 border-sky-500/30 text-sky-300',
+                      'bg-teal-500/15 border-teal-500/30 text-teal-300'];
+  const symbols = Object.keys(grouped).filter(s => s !== '（未知）');
+  document.getElementById('importStockSummary').innerHTML =
+    symbols.map((sym, i) => {
+      const rows  = grouped[sym];
+      const okCnt = rows.filter(r => !r.errors.length).length;
+      const color = chipColors[i % chipColors.length];
+      const isNew = !state.stocks.find(s => s.symbol === sym);
+      return `<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold ${color}">
+        <span class="font-mono">${sym}</span>
+        <span class="opacity-60">${okCnt} 筆</span>
+        ${isNew ? '<span class="bg-white/10 px-1.5 py-0.5 rounded text-xs font-normal opacity-80">新增</span>' : ''}
+      </div>`;
+    }).join('') +
+    (grouped['（未知）'] ? `<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 text-xs font-semibold">⚠ 未知代號 ${grouped['（未知）'].length} 筆</div>` : '');
+
+  // ── Grouped detail tables ──
+  document.getElementById('importPreviewBody').innerHTML = symbols.map((sym, i) => {
+    const rows = grouped[sym];
+    const color = chipColors[i % chipColors.length];
+    const rows_html = rows.map(r => {
+      const ok = !r.errors.length;
+      return `<tr class="border-b border-white/[0.03] ${ok ? '' : 'bg-red-500/5'} hover:bg-white/[0.02] transition-colors">
+        <td class="py-2 px-3">
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${r.type === 'buy' ? 'bg-emerald-500/15 text-emerald-400' : r.type === 'sell' ? 'bg-red-500/15 text-red-400' : 'bg-slate-700 text-slate-500'}">
+            ${r.type === 'buy' ? '買入' : r.type === 'sell' ? '賣出' : '?'}
+          </span>
+        </td>
+        <td class="py-2 px-3 text-right font-mono text-slate-200">${r.qty > 0 ? r.qty.toLocaleString() : '—'}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-200">${r.price > 0 ? fmt(r.price) : '—'}</td>
+        <td class="py-2 px-3 text-slate-500 font-mono text-xs">${r.date || '—'}</td>
+        <td class="py-2 px-3 text-right">${ok
+          ? '<span class="text-emerald-400 text-xs">✓</span>'
+          : `<span class="text-red-400 text-xs">${r.errors.join('、')}</span>`}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="rounded-xl border border-white/5 overflow-hidden">
+      <div class="flex items-center gap-2 px-4 py-2.5 bg-slate-800/60 border-b border-white/5">
+        <span class="text-xs font-bold font-mono px-2 py-0.5 rounded-lg border ${color}">${sym}</span>
+        <span class="text-xs text-slate-500">${rows.filter(r=>!r.errors.length).length} / ${rows.length} 筆有效</span>
+      </div>
+      <table class="w-full text-xs">
+        <thead><tr class="text-slate-600 uppercase tracking-wider border-b border-white/5 bg-slate-800/30">
+          <th class="text-left py-2 px-3 font-semibold">類型</th>
+          <th class="text-right py-2 px-3 font-semibold">股數</th>
+          <th class="text-right py-2 px-3 font-semibold">價格</th>
+          <th class="text-left py-2 px-3 font-semibold">日期</th>
+          <th class="text-right py-2 px-3 font-semibold">狀態</th>
+        </tr></thead>
+        <tbody>${rows_html}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  // ── Counts & status ──
+  document.getElementById('importPreviewCount').textContent =
+    `${symbols.length} 支股票 · ${valid.length} 筆有效 / 共 ${_importRows.length} 筆`;
+  document.getElementById('importPreview').classList.remove('hidden');
+
+  const errSummary = document.getElementById('importErrorSummary');
+  if (invalid.length) {
+    errSummary.textContent = `⚠ ${invalid.length} 筆資料有錯誤（已標紅），匯入時自動略過`;
+    errSummary.classList.remove('hidden');
+  } else {
+    errSummary.classList.add('hidden');
+  }
+
+  document.getElementById('importConfirmBtn').disabled = valid.length === 0;
+  document.getElementById('importConfirmBtn').textContent =
+    `確認匯入 ${symbols.length} 支股票`;
+  document.getElementById('importFooterHint').textContent = `來源：${filename}`;
+}
+
+async function confirmImport() {
+  const valid = _importRows.filter(r => !r.errors.length);
+  const newSymbols = new Set();
+
+  for (const row of valid) {
+    let stock = state.stocks.find(s => s.symbol === row.symbol);
+    if (!stock) {
+      const id = Date.now().toString() + Math.random().toString(36).slice(2,5);
+      stock = { id, symbol: row.symbol, name: '', trades: [] };
+      state.stocks.push(stock);
+      newSymbols.add(row.symbol);
+    }
+    stock.trades.push({ type: row.type, qty: row.qty, price: row.price, date: row.date });
+  }
+
+  if (state.stocks.length > 0 && !state.activeId) {
+    state.activeId = state.stocks[0].id;
+  }
+
+  saveState();
+  closeImportModal();
+  render();
+
+  // Fetch prices for new symbols
+  if (newSymbols.size) {
+    await Promise.all([...newSymbols].map(async sym => {
+      const data = await fetchPrice(sym);
+      if (data) state.prices[sym] = data;
+    }));
+    render();
+  }
+}
+
+function downloadTemplate() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['symbol','type','qty','price','date'],
+    ['2330.TW','buy','1000','850.00','2024-11-01'],
+    ['2330.TW','buy','500','820.00','2024-12-15'],
+    ['2330.TW','sell','200','900.00','2025-01-10'],
+    ['AAPL','buy','100','185.50','2024-10-05'],
+  ]);
+  ws['!cols'] = [{wch:12},{wch:8},{wch:8},{wch:10},{wch:12}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '交易記錄');
+  XLSX.writeFile(wb, '股票交易範本.xlsx');
+}
+
+document.getElementById('importModalOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeImportModal();
+});
+
+// ─── Init ─────────────────────────────────────────────────
+// 初始化由 Firebase onAuthStateChanged 觸發，此處不直接呼叫
+render(); // 顯示空白畫面等待登入
+</script>
+</body>
+</html>
