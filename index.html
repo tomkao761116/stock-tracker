@@ -325,11 +325,13 @@ window._loadCloudState = async function() {
       state.stocks   = d.stocks   || [];
       state.activeId = d.activeId || null;
     } else {
-      // first login — migrate localStorage data if any
       loadState();
       await saveState();
     }
-    if (!state.activeId && state.stocks.length) state.activeId = state.stocks[0].id;
+    // activeId 對不上時自動選第一支
+    if ((!state.activeId || !state.stocks.find(s => s.id === state.activeId)) && state.stocks.length) {
+      state.activeId = state.stocks[0].id;
+    }
   } catch(e) { console.error('Firestore load error', e); loadState(); }
 };
 
@@ -456,8 +458,10 @@ function renderTabs() {
     const active = s.id === state.activeId;
     const tab = document.createElement('button');
     tab.className = `flex items-center gap-0.5 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${active ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`;
-    tab.innerHTML = `<span class="font-mono">${s.symbol}</span>${pnlBadge}`;
-    tab.onclick = () => { state.activeId = s.id; render(); };
+    const displayName = s.name || s.symbol;
+    const code = s.symbol.replace(/\.(TW|TWO)$/i,'');
+    tab.innerHTML = `<span>${displayName}</span><span class="ml-1.5 text-xs font-mono opacity-50">${code}</span>${pnlBadge}`;
+    tab.onclick = () => { state.activeId = s.id; saveState(); render(); };
     bar.appendChild(tab);
   }
   const addBtn = document.createElement('button');
@@ -482,7 +486,13 @@ function renderMain() {
       </div>`;
     return;
   }
-  const stock = state.stocks.find(s => s.id === state.activeId);
+  // activeId 對不上時自動選第一支
+  let stock = state.stocks.find(s => s.id === state.activeId);
+  if (!stock && state.stocks.length) {
+    state.activeId = state.stocks[0].id;
+    stock = state.stocks[0];
+    saveState();
+  }
   if (!stock) return;
   const { totalQty, avgCost, realizedPnL } = calcStats(stock.trades);
   const pData = state.prices[stock.symbol];
