@@ -798,46 +798,40 @@ function closeModal() {
 const YF_PROXY = 'https://yf-proxy.aiden761116.workers.dev';
 function proxyUrl(url) { return `${YF_PROXY}/?url=${encodeURIComponent(url)}`; }
 
-// 中文名稱 → 代號 對照（Yahoo 搜尋不支援中文，需本地轉換）
-const ZH_MAP = {
-  '台積電':['2330.TW'],'積電':['2330.TW'],'鴻海':['2317.TW'],'聯發科':['2454.TW'],
-  '廣達':['2382.TW'],'台達電':['2308.TW'],'富邦金':['2881.TW'],'國泰金':['2882.TW'],
-  '兆豐金':['2886.TW'],'中信金':['2891.TW'],'玉山金':['2884.TW'],'元大金':['2885.TW'],
-  '第一金':['2892.TW'],'華南金':['2880.TW'],'開發金':['2883.TW'],'台新金':['2887.TW'],
-  '永豐金':['2890.TW'],'合庫金':['5880.TW'],'聯電':['2303.TW'],'中華電':['2412.TW'],
-  '大立光':['3008.TW'],'中鋼':['2002.TW'],'台塑':['1301.TW'],'南亞':['1303.TW'],
-  '台化':['1326.TW'],'台塑化':['6505.TW'],'和泰車':['2207.TW'],'華碩':['2357.TW'],
-  '研華':['2395.TW'],'日月光':['3711.TW'],'瑞昱':['2379.TW'],'聯詠':['3034.TW'],
-  '國巨':['2327.TW'],'光寶科':['2301.TW'],'和碩':['4938.TW'],'緯創':['3231.TW'],
-  '緯穎':['6669.TW'],'技嘉':['2376.TW'],'微星':['2377.TW'],'智邦':['5283.TW'],
-  '陽明':['2609.TW'],'萬海':['2615.TW'],'長榮':['2603.TW'],'長榮航':['2618.TW'],
-  '華航':['2610.TW'],'台灣大':['3045.TW'],'遠傳':['4904.TW'],'統一':['1216.TW'],
-  '統一超':['2912.TW'],'彰銀':['2801.TW'],'南亞科':['2408.TW'],'華邦電':['2344.TW'],
-  '英業達':['2356.TW'],'可成':['2474.TW'],'正新':['2105.TW'],
-  // ETF
-  '元大台灣50':['0050.TW'],'台灣50':['0050.TW'],'0050':['0050.TW'],
-  '元大高股息':['0056.TW'],'高股息':['0056.TW','00878.TW','00919.TW'],
-  '富邦台50':['006208.TW'],'國泰永續高股息':['00878.TW'],'永續高股息':['00878.TW'],
-  '群益台灣精選高息':['00919.TW'],'復華台灣科技優息':['00929.TW'],
-  '元大台灣價值高息':['00940.TW'],'元大美債':['00679B.TW'],'國泰美債':['00687B.TW'],
-};
+// ── 台股清單快取（來自 TWSE STOCK_DAY_ALL）─────────────
+let _twStockCache = null;
+let _twStockCacheTime = 0;
+const TW_CACHE_TTL = 6 * 60 * 60 * 1000; // 6小時更新一次
 
-async function symbolToResult(sym) {
-  const data = await fetchPrice(sym).catch(() => null);
-  if (!data) return null;
-  const isTW = sym.endsWith('.TW') || sym.endsWith('.TWO');
-  return { symbol: sym, longname: data.name, shortname: data.name,
-           exchange: isTW ? 'TAI' : '', quoteType: 'EQUITY' };
-}
+async function getTWStockList() {
+  const now = Date.now();
+  // 先從 localStorage 讀快取
+  if (!_twStockCache) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('twStockList') || 'null');
+      if (cached && now - cached.ts < TW_CACHE_TTL) {
+        _twStockCache = cached.data;
+        _twStockCacheTime = cached.ts;
+      }
+    } catch(e) {}
+  }
+  if (_twStockCache) return _twStockCache;
 
-async function searchViaAPI(q) {
-  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0&enableFuzzyQuery=true`;
+  // 重新抓取
   try {
-    const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+    const url = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL';
+    const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
-    return (data?.quotes || []).filter(r =>
-      r.symbol && ['EQUITY','ETF','MUTUALFUND','INDEX'].includes(r.quoteType)
-    ).slice(0, 8);
+    // 格式化：{ code, name, price, change }
+    _twStockCache = data.map(s => ({
+      code:   s.Code,
+      name:   s.Name,
+      symbol: s.Code + '.TW',
+      price:  parseFloat(s.ClosingPrice) || 0,
+      change: parseFloat(s.Change) || 0,
+    }));
+    localStorage.setItem('twStockList', JSON.stringify({ ts: now, data: _twStockCache }));
+    return _twStockCache;
   } catch(e) { return []; }
 }
 
@@ -845,35 +839,45 @@ async function searchStocks(query) {
   if (!query || query.length < 1) return [];
   const q = query.trim();
   const hasChinese = /[一-鿿]/.test(q);
-  const isDigits   = /^\d{4,6}$/.test(q);
-  const isSymbol   = /^[A-Za-z0-9.]{1,10}$/.test(q);
+  const isDigits   = /^\d{2,6}[A-Za-z]?$/.test(q);  // 台股代號（含如 00679B）
+  const isEnglish  = /^[A-Za-z][A-Za-z0-9.]{0,9}$/.test(q);
 
-  // ── 中文輸入：本地對照 → 批次驗證 ──
-  if (hasChinese) {
-    const matched = Object.entries(ZH_MAP)
-      .filter(([k]) => k.includes(q) || q.includes(k))
-      .flatMap(([, syms]) => syms);
-    const unique = [...new Set(matched)].slice(0, 6);
-    if (unique.length) {
-      const results = await Promise.all(unique.map(symbolToResult));
-      return results.filter(Boolean);
-    }
-    return [];
+  // ── 台股 / ETF：從 TWSE 完整清單搜尋 ──
+  if (hasChinese || isDigits) {
+    const list = await getTWStockList();
+    const hits = list.filter(s =>
+      s.name.includes(q) ||
+      s.code.startsWith(q.toUpperCase()) ||
+      s.code === q.toUpperCase()
+    ).slice(0, 8);
+
+    return hits.map(s => ({
+      symbol:    s.symbol,
+      shortname: s.name,
+      longname:  s.name,
+      exchange:  'TAI',
+      quoteType: s.code.startsWith('0') ? 'ETF' : 'EQUITY',
+      _price:    s.price,
+      _change:   s.change,
+    }));
   }
 
-  // ── 純數字：台股代號，補 .TW / .TWO ──
-  if (isDigits) {
-    const results = await Promise.all([q+'.TW', q+'.TWO'].map(symbolToResult));
-    return results.filter(Boolean);
-  }
-
-  // ── 英文 / 代號：直接 API 搜尋 ──
-  if (isSymbol) {
-    const apiResults = await searchViaAPI(q);
-    if (apiResults.length) return apiResults;
-    // fallback: 直接驗證輸入的代號
-    const direct = await symbolToResult(q.toUpperCase());
-    return direct ? [direct] : [];
+  // ── 美股 / 其他：Yahoo Finance API 搜尋 ──
+  if (isEnglish) {
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0&enableFuzzyQuery=true`;
+    try {
+      const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+      const data = await res.json();
+      const hits = (data?.quotes || []).filter(r =>
+        r.symbol && ['EQUITY','ETF','MUTUALFUND','INDEX'].includes(r.quoteType)
+      ).slice(0, 8);
+      if (hits.length) return hits;
+    } catch(e) {}
+    // fallback: 直接驗證代號
+    try {
+      const price = await fetchPrice(q.toUpperCase());
+      if (price) return [{ symbol: q.toUpperCase(), shortname: price.name, longname: price.name, exchange: '', quoteType: 'EQUITY' }];
+    } catch(e) {}
   }
 
   return [];
@@ -900,6 +904,7 @@ function renderSearchResults(results, query) {
     const exchange  = r.exchange || '';
     const typeLabel = r.quoteType === 'ETF' ? 'ETF' : r.quoteType === 'EQUITY' ? '股票' : r.quoteType;
     const already   = !!state.stocks.find(s => s.symbol === r.symbol);
+    const priceHtml = r._price ? `<span class="text-xs font-mono text-slate-400">${r._price.toFixed(2)}</span>` : '';
     return `<button onclick="selectStock('${r.symbol}','${name.replace(/'/g,"\\'")}','${already}')"
       class="w-full flex items-center justify-between gap-3 px-3 py-3 rounded-xl hover:bg-white/5 transition-all text-left group ${already ? 'opacity-40 cursor-not-allowed' : ''}">
       <div class="flex-1 min-w-0">
@@ -910,9 +915,12 @@ function renderSearchResults(results, query) {
         </div>
         <div class="text-xs text-slate-400 truncate mt-0.5">${name}</div>
       </div>
-      <span class="text-xs font-semibold shrink-0 ${already ? 'text-slate-600' : 'text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity'}">
-        ${already ? '已加入' : '+ 新增'}
-      </span>
+      <div class="flex items-center gap-2 shrink-0">
+        ${priceHtml}
+        <span class="text-xs font-semibold ${already ? 'text-slate-600' : 'text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity'}">
+          ${already ? '已加入' : '+ 新增'}
+        </span>
+      </div>
     </button>`;
   }).join('');
 }
