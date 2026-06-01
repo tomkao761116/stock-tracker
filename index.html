@@ -263,28 +263,47 @@ function saveState() {
 }
 
 // ─── Price Fetch ──────────────────────────────────────────
+async function fetchTWSEPrice(code, market) {
+  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${market}_${code}.tw&json=1&delay=0`;
+  try {
+    const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+    const data = await res.json();
+    const item = data?.msgArray?.[0];
+    if (!item || !item.y) return null;
+    const rawZ  = parseFloat(item.z);             // 即時價（休市為 NaN）
+    const prev  = parseFloat(item.y) || 0;        // 昨收
+    const price = isNaN(rawZ) ? prev : rawZ;       // 休市時用昨收
+    if (!price) return null;
+    const chg  = price - prev;
+    const chgP = prev ? (chg / prev * 100) : 0;
+    return { price, change: chg, changeP: chgP, name: item.n || code };
+  } catch(e) { return null; }
+}
+
 async function fetchPrice(symbol) {
-  // 台股（.TW / .TWO）用 TWSE 即時 API
   const isTW  = symbol.endsWith('.TW');
   const isTWO = symbol.endsWith('.TWO');
+
   if (isTW || isTWO) {
-    const code   = symbol.replace(/\.(TW|TWO)$/i, '');
-    const market = isTWO ? 'otc' : 'tse';
-    const url    = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${market}_${code}.tw&json=1&delay=0`;
+    const code = symbol.replace(/\.(TW|TWO)$/i, '');
+    // 自動偵測上市(tse)或上櫃(otc)
+    let result = await fetchTWSEPrice(code, 'tse');
+    if (!result) result = await fetchTWSEPrice(code, 'otc');
+    if (result) return result;
+    // fallback: Yahoo Finance via proxy
     try {
-      const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(6000) });
+      const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
+      const res  = await fetch(proxyUrl(url), { signal: AbortSignal.timeout(8000) });
       const data = await res.json();
-      const item = data?.msgArray?.[0];
-      if (!item) return null;
-      const price = parseFloat(item.z) || parseFloat(item.y); // z=即時價，y=昨收（收盤後）
-      const prev  = parseFloat(item.y) || price;
-      const chg   = price - prev;
-      const chgP  = prev ? (chg / prev * 100) : 0;
-      return { price, change: chg, changeP: chgP, name: item.n || symbol };
-    } catch(e) { /* fallthrough to Yahoo */ }
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta) return null;
+      const price = meta.regularMarketPrice ?? meta.previousClose;
+      const prev  = meta.previousClose ?? price;
+      return { price, change: price - prev, changeP: prev ? (price-prev)/prev*100 : 0, name: meta.longName || meta.shortName || symbol };
+    } catch(e) { return null; }
   }
 
-  // 美股 / 其他用 Yahoo Finance
+  // 美股 / 其他：Yahoo Finance（直接呼叫，已知無 CORS 問題）
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
   try {
     const res  = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -293,9 +312,7 @@ async function fetchPrice(symbol) {
     if (!meta) return null;
     const price = meta.regularMarketPrice ?? meta.previousClose;
     const prev  = meta.previousClose ?? price;
-    const chg   = price - prev;
-    const chgP  = prev ? (chg / prev * 100) : 0;
-    return { price, change: chg, changeP: chgP, name: meta.longName || meta.shortName || symbol };
+    return { price, change: price-prev, changeP: prev ? (price-prev)/prev*100 : 0, name: meta.longName || meta.shortName || symbol };
   } catch(e) { return null; }
 }
 
@@ -418,7 +435,11 @@ function renderMain() {
     saveState();
   }
   if (!stock) return;
-  const { totalQty, avgCost, realizedPnL, totalDividend } = calcStats(stock.trades);
+  const _cs = calcStats(stock.trades);
+  const totalQty     = _cs.totalQty     ?? 0;
+  const avgCost      = _cs.avgCost      ?? 0;
+  const realizedPnL  = _cs.realizedPnL  ?? 0;
+  const totalDividend= _cs.totalDividend?? 0;
   const pData = state.prices[stock.symbol];
   const currentPrice = pData?.price ?? null;
   const unrealizedPnL = currentPrice != null && totalQty > 0 ? (currentPrice - avgCost) * totalQty : null;
